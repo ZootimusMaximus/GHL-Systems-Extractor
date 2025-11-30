@@ -34,14 +34,14 @@ const BASE_URL = "https://services.leadconnectorhq.com";
 const api = axios.create({
   baseURL: BASE_URL,
   headers: {
-    // IMPORTANT: for Private Integrations, the token is sent *as-is*.
-    // NO 'Bearer ' prefix. This was causing your 401s.
-    Authorization: TOKEN,
+    // ✅ MUST be Bearer + token, this was the issue
+    Authorization: `Bearer ${TOKEN}`,
     Accept: "application/json",
-    Version: "2021-07-28"
+    "Content-Type": "application/json",
+    Version: "2021-07-28",
   },
   timeout: 90000,
-  validateStatus: () => true
+  validateStatus: () => true,
 });
 
 // ========= HELPERS =============
