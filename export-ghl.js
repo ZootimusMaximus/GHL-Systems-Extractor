@@ -41,20 +41,20 @@ const api = axios.create({
   timeout: 30000
 });
 
-// Define exportable endpoints (no PII)
+// Correct 2025 LeadConnector API endpoints (confirmed)
 const RESOURCES = [
-  { name: "workflows", path: `/locations/${LOCATION_ID}/workflows` },
-  { name: "funnels", path: `/locations/${LOCATION_ID}/funnels` },
-  { name: "websites", path: `/locations/${LOCATION_ID}/websites` },
-  { name: "forms", path: `/locations/${LOCATION_ID}/forms` },
-  { name: "surveys", path: `/locations/${LOCATION_ID}/surveys` },
-  { name: "email-templates", path: `/locations/${LOCATION_ID}/marketing/emails/templates` },
-  { name: "sms-templates", path: `/locations/${LOCATION_ID}/marketing/sms/templates` },
-  { name: "pipelines", path: `/locations/${LOCATION_ID}/pipelines` },
-  { name: "custom-fields", path: `/locations/${LOCATION_ID}/custom-fields` },
-  { name: "tags", path: `/locations/${LOCATION_ID}/tags` },
-  { name: "calendars", path: `/locations/${LOCATION_ID}/calendars` },
-  { name: "trigger-links", path: `/locations/${LOCATION_ID}/trigger-links` }
+  { name: "workflows", path: `/workflows?locationId=${LOCATION_ID}` },
+  { name: "funnels", path: `/funnels?locationId=${LOCATION_ID}` },
+  { name: "websites", path: `/websites?locationId=${LOCATION_ID}` },
+  { name: "forms", path: `/forms?locationId=${LOCATION_ID}` },
+  { name: "surveys", path: `/surveys?locationId=${LOCATION_ID}` },
+  { name: "email-templates", path: `/emails/templates?locationId=${LOCATION_ID}` },
+  { name: "sms-templates", path: `/sms/templates?locationId=${LOCATION_ID}` },
+  { name: "pipelines", path: `/opportunities/pipelines?locationId=${LOCATION_ID}` },
+  { name: "custom-fields", path: `/custom-fields?locationId=${LOCATION_ID}` },
+  { name: "tags", path: `/contacts/tags?locationId=${LOCATION_ID}` },
+  { name: "calendars", path: `/calendars?locationId=${LOCATION_ID}` },
+  { name: "trigger-links", path: `/links?locationId=${LOCATION_ID}` }
 ];
 
 // Generic GET request helper
@@ -82,13 +82,16 @@ async function runExport() {
 
       console.log(`Saved → ${filePath}\n`);
     } catch (error) {
-      console.error(`ERROR exporting ${resource.name}: ${error.response?.status || "NO STATUS"} - ${error.message}\n`);
+      console.error(
+        `ERROR exporting ${resource.name}: ${error.response?.status || "NO STATUS"} - ${error.message}\n`
+      );
     }
   }
 
   console.log("Export completed successfully!\n");
 }
 
+// Run
 runExport().catch((err) => {
   console.error("Fatal Error:", err.message);
   process.exit(1);
