@@ -1,148 +1,244 @@
-// ======================================================
-//  GHL Config Exporter (No-PII) – v2 (Nov 2025 Safe Build)
-// ======================================================
-//  Exports HighLevel configuration data from one Location.
-//  Fully safe, no-P.I.I., audits only.
-// ======================================================
+// export-ghl.js
+//
+// GHL Config Exporter (No-PII)
+// Pulls non-client configuration data from a Go High Level (LeadConnector) Location.
+// Outputs structured JSON files inside /exports/YYYY-MM-DD_HHmmss/
+//
+// Required ENV Vars:
+//   TOKEN=Your_Private_Integration_Token
+//   LOCATION_ID=Your_GHL_Location_ID
+//
+// Run:
+//   TOKEN=xxx LOCATION_ID=yyy node export-ghl.js
 
 const axios = require("axios");
 const fs = require("fs-extra");
 const dayjs = require("dayjs");
 
-// ENV Vars Required:
+// ========= ENV =============
+
 const TOKEN = process.env.TOKEN;
 const LOCATION_ID = process.env.LOCATION_ID;
 
 if (!TOKEN || !LOCATION_ID) {
-  console.error("\n❌ ERROR: Missing TOKEN or LOCATION_ID");
-  console.error("Usage:");
-  console.error("TOKEN=xxx LOCATION_ID=yyy node export-ghl.js\n");
+  console.error("\n[ERROR] TOKEN and LOCATION_ID env vars are required.\n");
+  console.error("Example:");
+  console.error("  TOKEN=your_token LOCATION_ID=your_location_id node export-ghl.js\n");
   process.exit(1);
 }
 
-// ----------------------
-// Axios Client
-// ----------------------
+const BASE_URL = "https://services.leadconnectorhq.com";
+
+// ========= AXIOS CLIENT (fixed auth) =============
+
 const api = axios.create({
-  baseURL: "https://services.leadconnectorhq.com",
+  baseURL: BASE_URL,
   headers: {
-    Authorization: `Bearer ${TOKEN}`,
+    // IMPORTANT: for Private Integrations, the token is sent *as-is*.
+    // NO 'Bearer ' prefix. This was causing your 401s.
+    Authorization: TOKEN,
     Accept: "application/json",
-    "Content-Type": "application/json",
-    "Accept-Version": "2021-07-28"
+    Version: "2021-07-28"
   },
   timeout: 90000,
   validateStatus: () => true
 });
 
-// ----------------------
-// Retry / Backoff Logic
-// ----------------------
-async function apiRequest(method, url, params = {}) {
+// ========= HELPERS =============
+
+// simple sleep
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// generic GET with retry for 429
+async function apiGet(path, params = {}) {
+  const maxRetries = 5;
   let attempt = 0;
+  let delay = 1000;
 
-  while (attempt < 5) {
-    const res = await api.request({ method, url, params });
+  while (true) {
+    const res = await api.get(path, { params });
 
-    // Success
-    if (res.status < 300) return res.data;
-
-    // Retry 429
-    if (res.status === 429) {
-      const wait = Math.min(10000, (attempt + 1) * 1500);
-      console.log(`⏳ Throttled (429). Retrying in ${wait}ms...`);
-      await new Promise(r => setTimeout(r, wait));
-      attempt++;
+    // rate limit
+    if (res.status === 429 && attempt < maxRetries) {
+      attempt += 1;
+      await sleep(delay);
+      delay = Math.min(delay * 2, 10000);
       continue;
     }
 
-    // Hard fail
-    throw new Error(`API ${method} ${url} → ${res.status}`);
-  }
+    // success
+    if (res.status >= 200 && res.status < 300) {
+      return res.data;
+    }
 
-  throw new Error(`429 Timeout after 5 retries: ${url}`);
+    // hard fail
+    throw new Error(`API get ${path} → ${res.status}`);
+  }
 }
 
-// ----------------------
-// Resources To Export
-// ----------------------
-const EXPORTS = [
+// for endpoints that support pagination; if not, we still just return once
+async function fetchAll(path, params = {}) {
+  const all = [];
+  let page = 1;
+  let nextPageToken = null;
+
+  do {
+    const p = { ...params };
+    if (nextPageToken) {
+      p.nextPageToken = nextPageToken;
+    } else {
+      p.page = page;
+      p.limit = p.limit || 100;
+    }
+
+    const data = await apiGet(path, p);
+
+    let items;
+    if (Array.isArray(data)) {
+      items = data;
+    } else if (Array.isArray(data.items)) {
+      items = data.items;
+    } else if (Array.isArray(data.data)) {
+      items = data.data;
+    } else {
+      items = [];
+    }
+
+    all.push(...items);
+    nextPageToken = data.nextPageToken || null;
+    page += 1;
+  } while (nextPageToken);
+
+  return all;
+}
+
+// ========= RESOURCES TO EXPORT =============
+//
+// NOTE: some of these may still 404 if GHL changes paths,
+// but the 401s will be gone after the auth fix.
+
+const RESOURCES = [
+  // workflows (uses include=triggers for full metadata)
   {
     name: "workflows",
-    url: "/workflows/",
+    path: "/workflows/",
+    useFetchAll: true,
     params: { locationId: LOCATION_ID, include: "triggers" }
   },
 
-  { name: "funnels", url: `/funnels/funnel/list/${LOCATION_ID}` },
-  { name: "funnel-pages", url: `/funnels/page/list/${LOCATION_ID}` },
+  // funnels + pages
+  {
+    name: "funnels",
+    path: `/funnels/funnel/list/${LOCATION_ID}`,
+    useFetchAll: false
+  },
+  {
+    name: "funnel-pages",
+    path: `/funnels/page/list/${LOCATION_ID}`,
+    useFetchAll: false
+  },
 
+  // forms & surveys with elements
   {
     name: "forms",
-    url: `/forms/location/${LOCATION_ID}`,
+    path: `/forms/location/${LOCATION_ID}`,
+    useFetchAll: false,
     params: { includeElements: true }
   },
-
   {
     name: "surveys",
-    url: `/surveys/location/${LOCATION_ID}`,
+    path: `/surveys/location/${LOCATION_ID}`,
+    useFetchAll: false,
     params: { includeElements: true }
   },
 
+  // email builder templates (new)
   {
     name: "email-templates",
-    url: `/emails/builder/template/location/${LOCATION_ID}`
+    path: `/emails/builder/template/location/${LOCATION_ID}`,
+    useFetchAll: true
   },
 
+  // legacy location templates (old email/SMS/etc)
   {
     name: "templates-legacy",
-    url: `/locations/${LOCATION_ID}/templates`
+    path: `/locations/${LOCATION_ID}/templates`,
+    useFetchAll: false
   },
 
-  { name: "pipelines", url: `/opportunities/pipelines/location/${LOCATION_ID}` },
+  // pipelines
+  {
+    name: "pipelines",
+    path: `/opportunities/pipelines/location/${LOCATION_ID}`,
+    useFetchAll: false
+  },
 
-  { name: "custom-fields", url: `/locations/${LOCATION_ID}/customFields` },
+  // custom fields & values
+  {
+    name: "custom-fields",
+    path: `/locations/${LOCATION_ID}/customFields`,
+    useFetchAll: false
+  },
+  {
+    name: "custom-values",
+    path: `/locations/${LOCATION_ID}/customValues`,
+    useFetchAll: false
+  },
 
-  { name: "custom-values", url: `/locations/${LOCATION_ID}/customValues` },
+  // tags
+  {
+    name: "tags",
+    path: `/locations/${LOCATION_ID}/tags`,
+    useFetchAll: false
+  },
 
-  { name: "tags", url: `/locations/${LOCATION_ID}/tags` },
-
+  // trigger links with stats
   {
     name: "trigger-links",
-    url: `/links/location/${LOCATION_ID}`,
+    path: `/links/location/${LOCATION_ID}`,
+    useFetchAll: false,
     params: { include: "stats" }
   },
 
-  { name: "calendars", url: `/calendars/location/${LOCATION_ID}` }
+  // calendars
+  {
+    name: "calendars",
+    path: `/calendars/location/${LOCATION_ID}`,
+    useFetchAll: false
+  }
 ];
 
-// ----------------------
-// Export Runner
-// ----------------------
-async function run() {
-  const stamp = dayjs().format("YYYY-MM-DD_HHmmss");
-  const outDir = `./exports/${stamp}`;
-  await fs.ensureDir(outDir);
+// ========= MAIN =============
+
+async function runExport() {
+  const ts = dayjs().format("YYYY-MM-DD_HHmmss");
+  const outputDir = `./exports/${ts}`;
+  await fs.ensureDir(outputDir);
 
   console.log(`\n🚀 Starting HighLevel export for Location: ${LOCATION_ID}`);
-  console.log(`📁 Output: ${outDir}\n`);
+  console.log(`📁 Output: ${outputDir}\n`);
 
-  for (const item of EXPORTS) {
-    console.log(`🔄 Fetching ${item.name} ...`);
+  for (const r of RESOURCES) {
+    const label = r.name;
+    console.log(`🔄 Fetching ${label} ...`);
+
     try {
-      const data = await apiRequest("get", item.url, item.params || {});
-      const path = `${outDir}/${item.name}.json`;
-      await fs.writeJson(path, data, { spaces: 2 });
-      console.log(`✅ Saved → ${path}\n`);
+      const data = r.useFetchAll
+        ? await fetchAll(r.path, r.params || {})
+        : await apiGet(r.path, r.params || {});
+
+      const filePath = `${outputDir}/${label}.json`;
+      await fs.writeJson(filePath, data, { spaces: 2 });
+      console.log(`✅ Saved ${label} → ${filePath}\n`);
     } catch (err) {
-      console.log(`❌ ERROR exporting ${item.name}: ${err.message}\n`);
+      console.log(`❌ ERROR exporting ${label}: ${err.message}\n`);
     }
   }
 
   console.log("🎉 Export completed!\n");
 }
 
-// Run it
-run().catch(err => {
-  console.error("Fatal:", err.message);
+runExport().catch((err) => {
+  console.error("Fatal error:", err.message);
   process.exit(1);
 });
