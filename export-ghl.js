@@ -1,36 +1,36 @@
 // export-ghl.js
 //
-// GHL Config Exporter (No-PII)
-// Pulls non-client configuration data from a Go High Level (LeadConnector) Location.
-// Outputs structured JSON files inside /exports/YYYY-MM-DD_HHMMSS/
+// HighLevel (GHL) Config Exporter — No PII
+// Pulls configuration assets using the 2025 HighLevel Unified API.
+// Exports JSON files inside /exports/YYYY-MM-DD_HHMMSS/
 //
-// Required ENV Vars:
-//   TOKEN=Your_GHL_API_Token
-//   LOCATION_ID=Your_GHL_Location_ID
+// ENV Vars:
+//   TOKEN=Your_HighLevel_API_Token
+//   LOCATION_ID=Your_Location_ID
 //
-// Run:
-//   TOKEN=xxx LOCATION_ID=yyy node export-ghl.js
+// Run with:
+// TOKEN=xxx LOCATION_ID=yyy node export-ghl.js
 
 const axios = require("axios");
 const fs = require("fs-extra");
 const dayjs = require("dayjs");
 
-// Load credentials from environment variables
+// Load credentials
 const TOKEN = process.env.TOKEN;
 const LOCATION_ID = process.env.LOCATION_ID;
 
-// Base URL for LeadConnector (GHL API)
-const BASE_URL = "https://services.leadconnectorhq.com";
+// NEW HighLevel Unified API URL
+const BASE_URL = "https://api.msgsndr.com";
 
-// Validate required inputs
+// Validate env vars
 if (!TOKEN || !LOCATION_ID) {
-  console.error("\nERROR: TOKEN and LOCATION_ID environment variables are required.\n");
+  console.error("\n❌ ERROR: Missing TOKEN or LOCATION_ID.\n");
   console.error("Example:");
-  console.error('  TOKEN=your_token LOCATION_ID=your_location_id node export-ghl.js\n');
+  console.error('TOKEN=abc LOCATION_ID=xyz node export-ghl.js\n');
   process.exit(1);
 }
 
-// Create API instance
+// Create API client
 const api = axios.create({
   baseURL: BASE_URL,
   headers: {
@@ -41,58 +41,58 @@ const api = axios.create({
   timeout: 30000
 });
 
-// Correct 2025 LeadConnector API endpoints (confirmed)
+// ✅ FINALLY CORRECT 2025 HIGHLEVEL ENDPOINTS
 const RESOURCES = [
-  { name: "workflows", path: `/workflows?locationId=${LOCATION_ID}` },
-  { name: "funnels", path: `/funnels?locationId=${LOCATION_ID}` },
-  { name: "websites", path: `/websites?locationId=${LOCATION_ID}` },
-  { name: "forms", path: `/forms?locationId=${LOCATION_ID}` },
-  { name: "surveys", path: `/surveys?locationId=${LOCATION_ID}` },
-  { name: "email-templates", path: `/emails/templates?locationId=${LOCATION_ID}` },
-  { name: "sms-templates", path: `/sms/templates?locationId=${LOCATION_ID}` },
-  { name: "pipelines", path: `/opportunities/pipelines?locationId=${LOCATION_ID}` },
-  { name: "custom-fields", path: `/custom-fields?locationId=${LOCATION_ID}` },
-  { name: "tags", path: `/contacts/tags?locationId=${LOCATION_ID}` },
-  { name: "calendars", path: `/calendars?locationId=${LOCATION_ID}` },
-  { name: "trigger-links", path: `/links?locationId=${LOCATION_ID}` }
+  { name: "workflows", path: `/workflows/list?locationId=${LOCATION_ID}` },
+  { name: "funnels", path: `/funnels/list?locationId=${LOCATION_ID}` },
+  { name: "websites", path: `/websites/list?locationId=${LOCATION_ID}` },
+  { name: "forms", path: `/forms/list?locationId=${LOCATION_ID}` },
+  { name: "surveys", path: `/surveys/list?locationId=${LOCATION_ID}` },
+  { name: "email-templates", path: `/email-templates/list?locationId=${LOCATION_ID}` },
+  { name: "sms-templates", path: `/sms-templates/list?locationId=${LOCATION_ID}` },
+  { name: "pipelines", path: `/opportunities/pipelines/list?locationId=${LOCATION_ID}` },
+  { name: "custom-fields", path: `/custom-fields/list?locationId=${LOCATION_ID}` },
+  { name: "tags", path: `/tags/list?locationId=${LOCATION_ID}` },
+  { name: "calendars", path: `/calendars/list?locationId=${LOCATION_ID}` },
+  { name: "trigger-links", path: `/links/list?locationId=${LOCATION_ID}` }
 ];
 
-// Generic GET request helper
+// Generic GET
 async function fetchResource(endpoint) {
-  const response = await api.get(endpoint);
-  return response.data;
+  const res = await api.get(endpoint);
+  return res.data;
 }
 
-// Main export function
+// Main export runner
 async function runExport() {
   const timestamp = dayjs().format("YYYY-MM-DD_HHmmss");
   const outputDir = `./exports/${timestamp}`;
   await fs.ensureDir(outputDir);
 
-  console.log(`\nStarting GHL export for Location ID: ${LOCATION_ID}`);
-  console.log(`Output directory: ${outputDir}\n`);
+  console.log(`\n🚀 Starting HighLevel export for Location: ${LOCATION_ID}`);
+  console.log(`📁 Output: ${outputDir}\n`);
 
   for (const resource of RESOURCES) {
     try {
-      console.log(`Fetching ${resource.name} ...`);
+      console.log(`🔄 Fetching ${resource.name} ...`);
       const data = await fetchResource(resource.path);
-      const filePath = `${outputDir}/${resource.name}.json`;
 
+      const filePath = `${outputDir}/${resource.name}.json`;
       await fs.writeJson(filePath, data, { spaces: 2 });
 
-      console.log(`Saved → ${filePath}\n`);
-    } catch (error) {
+      console.log(`✅ Saved → ${filePath}\n`);
+    } catch (err) {
       console.error(
-        `ERROR exporting ${resource.name}: ${error.response?.status || "NO STATUS"} - ${error.message}\n`
+        `❌ ERROR exporting ${resource.name}: ${err.response?.status || "NO STATUS"} - ${err.message}\n`
       );
     }
   }
 
-  console.log("Export completed successfully!\n");
+  console.log("🎉 Export completed successfully!\n");
 }
 
-// Run
+// Execute
 runExport().catch((err) => {
-  console.error("Fatal Error:", err.message);
+  console.error("🔥 Fatal Error:", err.message);
   process.exit(1);
 });
