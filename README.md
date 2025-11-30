@@ -1,228 +1,164 @@
-# GHL Config Exporter (No-PII) 🚀
-
-A Node.js tool for exporting **non-client configuration data** from a Go High Level (LeadConnector) sub-account.  
-Designed for **system audits**, **backups**, **version control**, **documentation**, and **AI-powered analysis** — without exposing any personal data.
-
----
+A Node.js tool for exporting non-client configuration data from a Go High Level (LeadConnector) sub-account.  
+Useful for audits, backups, version control, documentation, and AI optimization — all without exposing personal data.
 
 ## 📚 Table of Contents
-- ⭐ Features  
-- 📦 Exported Data  
-- 🗂 Output Structure  
-- ⚙️ Requirements  
-- 🔑 Getting Credentials  
-- 📥 Installation  
-- ▶️ Running the Exporter  
-- 🔒 Security Notes  
-- 🧩 Use Cases  
-- 🚫 What This Exporter Cannot Pull  
-- 🤖 Using AI to Analyze and Optimize  
-
----
+- ⭐ Features
+- 📦 Exported Data
+- 🗂 Output Structure
+- ⚙️ Requirements
+- 🔑 Getting Credentials
+- 📥 Installation
+- ▶️ Running the Exporter
+- 🔒 Security Notes
+- 🧩 Use Cases
+- 🚫 What This Exporter Cannot Pull
+- 🤖 Using AI to Analyze & Optimize
 
 ## ⭐ Features
+- Exports major GHL configuration assets
+- Saves structured JSON for each resource
+- No PII, no contacts, no conversations
+- Ideal for audits, migrations, rebuilds, documentation
+- Works with Private Integration Tokens or API Keys
+- Updated for 2025 LeadConnector API behavior
+- Includes rate-limit (429) retry handling
 
-- Exports major GHL configuration assets  
-- Saves all exports as clean JSON  
-- Exports **no PII**, no contacts, no conversations  
-- Ideal for audits, documentation, migrations, and optimization  
-- Works with Private Integration Tokens or Location API Keys  
-
----
-
-## 📦 Exported Data
-
-This exporter pulls **system configuration assets only**.
-
-### ✅ Included
+## 📦 Exported Data (Safe Only)
+### Included
 - Workflows / Automations  
-- Funnels & Funnel Steps  
-- Websites  
+- Funnels  
+- Funnel Pages  
 - Forms  
 - Surveys  
 - Email Templates  
 - SMS Templates  
 - Pipelines (structure only)  
 - Custom Fields  
+- Custom Values  
 - Tags  
 - Trigger Links  
 - Calendar Settings  
 
-### ❌ Excluded (for safety)
+### Excluded (PII)
 - Contacts  
 - Conversations  
 - Opportunities  
-- Payments / Transactions  
-- Notes / Tasks  
-- Messages / Logs  
-- Any PII or customer-facing data  
-
----
+- Payments  
+- Tasks / Notes  
+- Analytics tied to users  
+- Any customer-facing data  
 
 ## 🗂 Output Structure
-
-Exports are saved in this format:
-
 exports/YYYY-MM-DD_HHMMSS/
 workflows.json
 funnels.json
-websites.json
+funnel-pages.json
 forms.json
 surveys.json
-email-templates.json
-sms-templates.json
+email-templates.builder.json
+templates.all.json
+templates.email.json
+templates.sms.json
 pipelines.json
 custom-fields.json
+custom-values.json
 tags.json
+trigger-links.json
 calendars.json
 
-yaml
+markdown
 Copy code
-
-Each file contains raw JSON from the GHL API.
-
----
 
 ## ⚙️ Requirements
-
-- Node.js **18+**  
-- GHL **Private Integration Token** or **Location API Key**  
-- GHL **Location ID**  
-
----
+- Node.js 18+
+- GHL Location ID
+- Location API Key or Private Integration Token
 
 ## 🔑 Getting Credentials
-
-### 1️⃣ Location ID  
-Your GHL URL will look like:
-
+### Location ID  
+URL format:
 https://app.gohighlevel.com/location/{LOCATION_ID}/...
 
-makefile
+shell
 Copy code
 
-Copy everything after `location/`.
+### API Token  
+**Location Level:** Settings → Integrations → API Keys  
+**Agency Level:** Agency Settings → Private Integrations → Create Token  
 
-### 2️⃣ API Token
-
-Location-Level:
-Settings → Integrations → API Keys
-
-makefile
-Copy code
-
-Agency-Level:
-Agency Settings → Private Integrations → Create Token
-
-yaml
-Copy code
-
-⚠️ Never commit tokens or `.env` files to GitHub.
-
----
+> Never commit API keys or .env files.
 
 ## 📥 Installation
-
+```bash
 npm install
-
-yaml
+▶️ Running the Exporter
+bash
 Copy code
-
----
-
-## ▶️ Running the Exporter
-
 TOKEN=your_token LOCATION_ID=your_location_id node export-ghl.js
-
-makefile
-Copy code
-
 Example:
 
-TOKEN=abc123 LOCATION_ID=xyz789 node export-ghl.js
-
-yaml
+bash
 Copy code
+TOKEN=abc123 LOCATION_ID=xyz789 node export-ghl.js
+🔒 Security Notes
+No PII endpoints used
 
----
+Add .env to .gitignore
 
-## 🔒 Security Notes
+Use minimum-scope keys
 
-- No PII endpoints are included  
-- Add `.env` to `.gitignore`  
-- Use minimum-scope or read-only tokens  
-- Never commit API keys  
+Safe to store in version control
 
----
+🧩 Use Cases
+System configuration audits
 
-## 🧩 Use Cases
+Mapping automation logic
 
-- Full system audits  
-- Documenting GHL infrastructure  
-- Cloning or migrating sub-accounts  
-- Version-controlling automations  
-- Tracking changes across exports  
-- Debugging workflow logic  
-- Creating AI-based system optimization reports  
+Documenting GHL setup
 
----
+Migrating or cloning accounts
 
-# 🚫 What This Exporter Cannot Pull (and How to Retrieve It)
+Version-controlling workflows
 
-This exporter intentionally avoids PII.  
-Below is how to retrieve missing components manually if needed.
+Tracking structural changes
 
-### 📭 Email & SMS Conversation History
-Why: Contains PII.  
-How to retrieve:
-- Conversations → Export CSV
+Debugging broken automation logic
 
-AI can:
-- Identify top objections  
-- Improve follow-up sequences  
-- Detect stuck points in communication  
+Feeding config into AI for optimization
 
----
+🚫 What This Exporter Cannot Pull
+Email/SMS History:
+Retrieve manually via Conversations → Export CSV
 
-### 📉 Funnel Analytics
-Why: User-level analytics.  
-How to retrieve:
-- Funnel Analytics dashboard  
-- GA4 event exports  
+Funnel Analytics:
+Retrieve via Funnel Analytics or GA4
 
-AI can:
-- Detect drop-off points  
-- Rewrite funnel steps  
-- Suggest structural changes  
+Workflow Performance:
+Retrieve via Workflow → History
 
----
+🤖 Using AI to Analyze & Optimize
+Upload the export folder into AI to automatically:
 
-### 🔁 Workflow Performance Metrics
-Why: Contains timestamps tied to contacts.  
-How to retrieve:
-- Workflows → Choose Workflow → History
+Generate system diagrams
 
-AI can:
-- Find loops and delays  
-- Suggest timing optimizations  
-- Identify missing if/else branches  
+Map funnel → workflow → field relationships
 
----
+Document naming conventions
 
-# 🤖 Using AI to Analyze & Optimize
+Create SOPs
 
-Once you export your GHL configuration:
+Identify redundant workflows
 
-1. Upload the export folder into an AI tool  
-2. AI can automatically:
-   - Map your entire automation architecture  
-   - Generate flowcharts & documentation  
-   - Identify redundant paths  
-   - Spot missing logic or failure states  
-   - Suggest simplified or optimized workflows  
-   - Recommend improvements to fields, funnels, triggers  
-   - Auto-generate SOPs and technical documentation  
+Suggest cleaner logic paths
 
-This turns your GHL system into a **fully analyzable and optimizable machine**.
+Find unused/duplicate fields
 
----
+Propose trigger/delay optimizations
+
+Improve tagging and pipelines
+
+Generate migration scripts
+
+Auto-document changes across exports
+
+Your GHL system becomes an analyzable, optimizable blueprint — not a black box
