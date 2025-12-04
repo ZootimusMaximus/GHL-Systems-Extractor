@@ -11,6 +11,13 @@
 // Run:
 //   TOKEN=xxx LOCATION_ID=yyy node export-ghl.js
 
+try {
+  require("dotenv").config();
+} catch (err) {
+  if (err.code !== "MODULE_NOT_FOUND") {
+    throw err;
+  }
+}
 const axios = require("axios");
 const fs = require("fs-extra");
 const dayjs = require("dayjs");
@@ -112,6 +119,22 @@ async function fetchAll(path, params = {}) {
   return all;
 }
 
+async function fetchFunnelPages(path, funnels = [], baseParams = {}) {
+  const pages = [];
+  if (Array.isArray(funnels) && funnels.length) {
+    for (const f of funnels) {
+      const funnelId = f.id || f.funnelId || f._id;
+      if (!funnelId) continue;
+      const data = await fetchAll(path, { ...baseParams, funnelId });
+      pages.push(...data);
+    }
+    return pages;
+  }
+  const fallback = await fetchAll(path, baseParams);
+  pages.push(...fallback);
+  return pages;
+}
+
 // ========= RESOURCES TO EXPORT =============
 //
 // NOTE: some of these may still 404 if GHL changes paths,
@@ -121,7 +144,7 @@ const RESOURCES = [
   // workflows (uses include=triggers for full metadata)
   {
     name: "workflows",
-    path: "/workflows/",
+    path: `/workflows/`,
     useFetchAll: true,
     params: { locationId: LOCATION_ID, include: "triggers" }
   },
@@ -129,34 +152,36 @@ const RESOURCES = [
   // funnels + pages
   {
     name: "funnels",
-    path: `/funnels/funnel/list/${LOCATION_ID}`,
-    useFetchAll: false
+    path: `/funnels/funnel/list`,
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
   },
   {
     name: "funnel-pages",
-    path: `/funnels/page/list/${LOCATION_ID}`,
+    path: `/funnels/page`,
     useFetchAll: false
   },
 
   // forms & surveys with elements
   {
     name: "forms",
-    path: `/forms/location/${LOCATION_ID}`,
+    path: `/forms/`,
     useFetchAll: false,
-    params: { includeElements: true }
+    params: { locationId: LOCATION_ID, includeElements: true }
   },
   {
     name: "surveys",
-    path: `/surveys/location/${LOCATION_ID}`,
+    path: `/surveys/`,
     useFetchAll: false,
-    params: { includeElements: true }
+    params: { locationId: LOCATION_ID, includeElements: true }
   },
 
   // email builder templates (new)
   {
     name: "email-templates",
-    path: `/emails/builder/template/location/${LOCATION_ID}`,
-    useFetchAll: true
+    path: `/emails/builder`,
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
   },
 
   // legacy location templates (old email/SMS/etc)
@@ -169,8 +194,9 @@ const RESOURCES = [
   // pipelines
   {
     name: "pipelines",
-    path: `/opportunities/pipelines/location/${LOCATION_ID}`,
-    useFetchAll: false
+    path: `/opportunities/pipelines`,
+    useFetchAll: false,
+    params: { locationId: LOCATION_ID }
   },
 
   // custom fields & values
@@ -195,16 +221,17 @@ const RESOURCES = [
   // trigger links with stats
   {
     name: "trigger-links",
-    path: `/links/location/${LOCATION_ID}`,
+    path: `/links/`,
     useFetchAll: false,
-    params: { include: "stats" }
+    params: { locationId: LOCATION_ID, include: "stats" }
   },
 
   // calendars
   {
     name: "calendars",
-    path: `/calendars/location/${LOCATION_ID}`,
-    useFetchAll: false
+    path: `/calendars/`,
+    useFetchAll: false,
+    params: { locationId: LOCATION_ID }
   }
 ];
 
@@ -214,6 +241,7 @@ async function runExport() {
   const ts = dayjs().format("YYYY-MM-DD_HHmmss");
   const outputDir = `./exports/${ts}`;
   await fs.ensureDir(outputDir);
+  const resultsCache = {};
 
   console.log(`\n🚀 Starting HighLevel export for Location: ${LOCATION_ID}`);
   console.log(`📁 Output: ${outputDir}\n`);
@@ -223,12 +251,18 @@ async function runExport() {
     console.log(`🔄 Fetching ${label} ...`);
 
     try {
-      const data = r.useFetchAll
-        ? await fetchAll(r.path, r.params || {})
-        : await apiGet(r.path, r.params || {});
+      let data;
+      if (r.name === "funnel-pages") {
+        data = await fetchFunnelPages(r.path, resultsCache["funnels"], r.params || {});
+      } else {
+        data = r.useFetchAll
+          ? await fetchAll(r.path, r.params || {})
+          : await apiGet(r.path, r.params || {});
+      }
 
       const filePath = `${outputDir}/${label}.json`;
       await fs.writeJson(filePath, data, { spaces: 2 });
+      resultsCache[label] = data;
       console.log(`✅ Saved ${label} → ${filePath}\n`);
     } catch (err) {
       console.log(`❌ ERROR exporting ${label}: ${err.message}\n`);
