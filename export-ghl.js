@@ -1,8 +1,8 @@
 // export-ghl.js
 //
 // GHL Config Exporter (No-PII)
-// Pulls non-client configuration data from a Go High Level (LeadConnector) Location.
-// Outputs structured JSON files inside /exports/YYYY-MM-DD_HHmmss/
+// Pulls configuration data from a Go High Level (LeadConnector) Location via OAuth 2.0/internal app.
+// Outputs structured JSON files inside /exports/YYYY-MM-DD_HHmmss/.
 
 try {
   require("dotenv").config();
@@ -14,55 +14,144 @@ const axios = require("axios");
 const fs = require("fs-extra");
 const dayjs = require("dayjs");
 
-// ========= ENV =============
-const TOKEN = process.env.TOKEN;
-const LOCATION_ID = process.env.LOCATION_ID;
+const {
+  OAUTH_CLIENT_ID,
+  OAUTH_CLIENT_SECRET,
+  OAUTH_REFRESH_TOKEN,
+  OAUTH_ACCESS_TOKEN,
+  LOCATION_ID
+} = process.env;
 
-if (!TOKEN || !LOCATION_ID) {
-  console.error("\n[ERROR] TOKEN and LOCATION_ID env vars are required.\n");
-  console.error("Example:");
-  console.error("  TOKEN=xxx LOCATION_ID=yyy node export-ghl.js\n");
+if (!LOCATION_ID) {
+  console.error("\n[ERROR] LOCATION_ID is required in the environment.\n");
   process.exit(1);
 }
 
-const BASE_URL = "https://services.leadconnectorhq.com";
+const hasStaticAccessToken = Boolean(OAUTH_ACCESS_TOKEN);
+const authMode = hasStaticAccessToken ? "static" : "oauth";
 
-// ========= AXIOS CLIENT =============
+if (!hasStaticAccessToken && (!OAUTH_CLIENT_ID || !OAUTH_CLIENT_SECRET || !OAUTH_REFRESH_TOKEN)) {
+  console.error(
+    "\n[ERROR] OAuth credentials (OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_REFRESH_TOKEN) are required when no static access token is provided.\n"
+  );
+  process.exit(1);
+}
+
+const BASE_URL = "https://rest.gohighlevel.com";
+const OAUTH_BASE_URL = "https://services.leadconnectorhq.com";
+
+let cachedAccessToken = authMode === "static" ? OAUTH_ACCESS_TOKEN : null;
+let tokenExpiresAt = 0;
+
+async function requestOAuthToken() {
+  console.log("🔐 Requesting OAuth access token...");
+
+  const response = await axios.post(
+    `${OAUTH_BASE_URL}/oauth/token`,
+    {
+      grant_type: "refresh_token",
+      client_id: OAUTH_CLIENT_ID,
+      client_secret: OAUTH_CLIENT_SECRET,
+      refresh_token: OAUTH_REFRESH_TOKEN
+    },
+    { headers: { "Content-Type": "application/json" }, timeout: 30000 }
+  );
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`OAuth token endpoint returned ${response.status}`);
+  }
+
+  const token = response.data?.access_token;
+  const expiresIn = Number(response.data?.expires_in) || 0;
+
+  if (!token) {
+    throw new Error("OAuth response missing access_token");
+  }
+
+  const bufferMs = 60 * 1000;
+  const ttlMs = expiresIn ? Math.max(expiresIn * 1000 - bufferMs, 15000) : 0;
+  tokenExpiresAt = Date.now() + ttlMs;
+  return token;
+}
+
+async function getAccessToken() {
+  if (authMode === "static") {
+    return OAUTH_ACCESS_TOKEN;
+  }
+
+  if (cachedAccessToken && Date.now() < tokenExpiresAt) {
+    return cachedAccessToken;
+  }
+
+  cachedAccessToken = await requestOAuthToken();
+  return cachedAccessToken;
+}
+
 const api = axios.create({
   baseURL: BASE_URL,
+  timeout: 90000,
   headers: {
-    Authorization: `Bearer ${TOKEN}`,
     Accept: "application/json",
     "Content-Type": "application/json",
     Version: "2021-07-28"
   },
-  timeout: 90000,
   validateStatus: () => true
 });
 
-// ========= HELPERS ============
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+api.interceptors.request.use(async (config) => {
+  const token = await getAccessToken();
+  config.headers = config.headers || {};
+  config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const { config, response } = error;
+    if (
+      response &&
+      response.status === 401 &&
+      authMode === "oauth" &&
+      config &&
+      !config._retry
+    ) {
+      config._retry = true;
+      try {
+        cachedAccessToken = await requestOAuthToken();
+        config.headers.Authorization = `Bearer ${cachedAccessToken}`;
+        return api(config);
+      } catch (tokenError) {
+        return Promise.reject(tokenError);
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function apiGet(path, params = {}) {
   console.log("DEBUG REQUEST:", path, params);
-
   const maxRetries = 5;
   let attempt = 0;
   let delay = 1000;
 
   while (true) {
-    const res = await api.get(path, { params });
+    const response = await api.get(path, { params });
 
-    if (res.status === 429 && attempt < maxRetries) {
+    if (response.status === 429 && attempt < maxRetries) {
       attempt++;
       await sleep(delay);
       delay = Math.min(delay * 2, 10000);
       continue;
     }
 
-    if (res.status >= 200 && res.status < 300) return res.data;
+    if (response.status >= 200 && response.status < 300) {
+      return response.data;
+    }
 
-    throw new Error(`API get ${path} → ${res.status}`);
+    throw new Error(`API get ${path} → ${response.status}`);
   }
 }
 
@@ -71,19 +160,18 @@ async function fetchAll(path, params = {}) {
   let nextPageToken = null;
 
   do {
-    const p = { ...params };
-    if (nextPageToken) p.nextPageToken = nextPageToken;
+    const requestParams = { ...params };
+    if (nextPageToken) requestParams.nextPageToken = nextPageToken;
 
-    const data = await apiGet(path, p);
+    const data = await apiGet(path, requestParams);
 
-    const items =
-      Array.isArray(data)
-        ? data
-        : Array.isArray(data.items)
-        ? data.items
-        : Array.isArray(data.data)
-        ? data.data
-        : [];
+    const items = Array.isArray(data)
+      ? data
+      : Array.isArray(data.items)
+      ? data.items
+      : Array.isArray(data.data)
+      ? data.data
+      : [];
 
     all.push(...items);
     nextPageToken = data.nextPageToken || null;
@@ -92,27 +180,91 @@ async function fetchAll(path, params = {}) {
   return all;
 }
 
-// Funnel pages wrapper
-async function fetchFunnelPages(funnels) {
-  const pages = [];
+const resolveId = (entity) => entity?.id || entity?.funnelId || entity?._id;
 
-  for (const f of funnels || []) {
-    const funnelId = f.id || f.funnelId || f._id;
+async function fetchFunnelsWithDetails() {
+  const list = await fetchAll("/funnels/funnel/list", { locationId: LOCATION_ID });
+  const details = [];
+
+  for (const funnel of list) {
+    const funnelId = resolveId(funnel);
     if (!funnelId) continue;
 
-    const data = await fetchAll("/funnels/page/list", {
+    try {
+      details.push(await apiGet(`/funnels/funnel/${funnelId}`, { locationId: LOCATION_ID }));
+    } catch (err) {
+      console.log(`❌ ERROR fetching funnel detail ${funnelId}: ${err.message}`);
+    }
+  }
+
+  return { list, details };
+}
+
+async function fetchFunnelPagesWithDetails(funnels = []) {
+  const pages = [];
+  const pageDetails = [];
+
+  for (const funnel of funnels) {
+    const funnelId = resolveId(funnel);
+    if (!funnelId) continue;
+
+    const funnelPages = await fetchAll("/funnels/page/list", {
       locationId: LOCATION_ID,
       funnelId
     });
 
-    pages.push(...data);
+    pages.push(...funnelPages);
+
+    for (const page of funnelPages) {
+      const pageId = page?.id || page?._id;
+      if (!pageId) continue;
+
+      try {
+        const detail = await apiGet(`/funnels/page/${pageId}`, { locationId: LOCATION_ID });
+        pageDetails.push(detail);
+      } catch (err) {
+        console.log(`❌ ERROR fetching funnel page detail ${pageId}: ${err.message}`);
+      }
+    }
   }
 
-  return pages;
+  return { pages, pageDetails };
 }
 
-// ========= PRIVATE API ENDPOINTS (DEC 2025) ============
+async function fetchEmails() {
+  const templates = await fetchAll("/emails/builder/templates", { locationId: LOCATION_ID });
+  const schedule = await fetchAll("/emails/schedule", { locationId: LOCATION_ID });
+  return { templates, schedule };
+}
+
+async function fetchPipelines() {
+  return await fetchAll("/opportunities/pipelines", { locationId: LOCATION_ID });
+}
+
+function extractPipelineStages(pipelines = []) {
+  const stages = [];
+  for (const pipeline of pipelines) {
+    const items = Array.isArray(pipeline.stages) ? pipeline.stages : [];
+    items.forEach((stage) => {
+      stages.push({ pipelineId: pipeline.id || pipeline.pipelineId || null, ...stage });
+    });
+  }
+  return stages;
+}
+
+async function preflightCheck(cache) {
+  console.log("🔍 Validating OAuth credentials via location metadata...");
+  const metadata = await apiGet(`/locations/${LOCATION_ID}`);
+  cache["location-settings"] = metadata;
+  cache["location-name"] = metadata?.name || LOCATION_ID;
+  console.log(`✅ Location ${cache["location-name"]} accessible via OAuth.`);
+}
+
 const RESOURCES = [
+  {
+    name: "location-settings",
+    fetchFn: async (cache) => cache["location-settings"] || (await apiGet(`/locations/${LOCATION_ID}`))
+  },
   {
     name: "workflows",
     path: "/workflows/",
@@ -121,118 +273,236 @@ const RESOURCES = [
   },
   {
     name: "funnels",
-    path: "/funnels/funnel/list",
+    fetchFn: async (cache) => {
+      const data = await fetchFunnelsWithDetails();
+      cache["funnels"] = data.list;
+      cache["funnels-details"] = data.details;
+      return data;
+    }
+  },
+  {
+    name: "funnel-pages",
+    fetchFn: async (cache) => {
+      const data = await fetchFunnelPagesWithDetails(cache["funnels"] || []);
+      cache["funnel-pages"] = data.pages;
+      cache["funnel-page-details"] = data.pageDetails;
+      return data;
+    }
+  },
+  {
+    name: "funnels-pagecount",
+    path: "/funnels/pagecount",
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "funnels-redirects",
+    path: "/funnels/redirect/list",
     useFetchAll: true,
     params: { locationId: LOCATION_ID }
   },
   {
     name: "forms",
     path: "/forms/",
-    useFetchAll: false,
+    useFetchAll: true,
     params: { locationId: LOCATION_ID, includeElements: true }
   },
   {
     name: "surveys",
     path: "/surveys/",
-    useFetchAll: false,
-    params: { locationId: LOCATION_ID, includeElements: true }
-  },
-  {
-    name: "email-templates",
-    path: "/emails/builder/templates",
     useFetchAll: true,
-    params: { locationId: LOCATION_ID }
-  },
-  {
-    name: "pipelines",
-    path: "/opportunities/pipelines",
-    useFetchAll: false,
-    params: { locationId: LOCATION_ID }
-  },
-  {
-    name: "custom-fields",
-    path: `/locations/${LOCATION_ID}/customFields`,
-    useFetchAll: false
-  },
-  {
-    name: "custom-values",
-    path: `/locations/${LOCATION_ID}/customValues`,
-    useFetchAll: false
-  },
-  {
-    name: "tags",
-    path: `/locations/${LOCATION_ID}/tags`,
-    useFetchAll: false
-  },
-  {
-    name: "links",
-    path: "/links/",
-    useFetchAll: false,
-    params: { locationId: LOCATION_ID, include: "stats" }
+    params: { locationId: LOCATION_ID, includeElements: true }
   },
   {
     name: "calendars",
     path: "/calendars/",
-    useFetchAll: false,
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "calendar-events",
+    path: "/calendars/events",
+    useFetchAll: true,
     params: { locationId: LOCATION_ID }
   },
   {
     name: "calendar-groups",
     path: "/calendars/groups",
-    useFetchAll: false,
+    useFetchAll: true,
     params: { locationId: LOCATION_ID }
   },
   {
     name: "calendar-resources",
     path: "/calendars/resources",
-    useFetchAll: false,
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "custom-values",
+    path: `/locations/${LOCATION_ID}/customValues`,
+    useFetchAll: true
+  },
+  {
+    name: "custom-fields",
+    path: `/locations/${LOCATION_ID}/customFields`,
+    useFetchAll: true
+  },
+  {
+    name: "tags",
+    path: `/locations/${LOCATION_ID}/tags`,
+    useFetchAll: true
+  },
+  {
+    name: "templates",
+    path: `/locations/${LOCATION_ID}/templates`,
+    useFetchAll: true
+  },
+  {
+    name: "medias",
+    path: "/medias/",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "emails",
+    fetchFn: async () => fetchEmails()
+  },
+  {
+    name: "kb",
+    path: "/knowledge-bases/",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "conversation-ai",
+    path: "/conversation-ai/models",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "agent-studio",
+    path: "/agent-studio/agents",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "pipelines",
+    fetchFn: async (cache) => {
+      const pipelines = await fetchPipelines();
+      cache["pipelines"] = pipelines;
+      return pipelines;
+    }
+  },
+  {
+    name: "pipeline-stages",
+    fetchFn: async (cache) => extractPipelineStages(cache["pipelines"] || [])
+  },
+  {
+    name: "products",
+    path: "/products/",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "prices",
+    path: "/products/prices",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "collections",
+    path: "/products/collections",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "orders",
+    path: "/payments/orders",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "transactions",
+    path: "/payments/transactions",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "subscriptions",
+    path: "/payments/subscriptions",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "coupons",
+    path: "/payments/coupons",
+    useFetchAll: true,
+    params: { locationId: LOCATION_ID }
+  },
+  {
+    name: "links",
+    path: "/links/",
+    useFetchAll: true,
     params: { locationId: LOCATION_ID }
   }
 ];
 
-// ========= MAIN =============
 async function runExport() {
   const ts = dayjs().format("YYYY-MM-DD_HHmmss");
   const outputDir = `./exports/${ts}`;
   await fs.ensureDir(outputDir);
 
   const cache = {};
+  const results = { attempted: 0, succeeded: 0, failed: [] };
 
   console.log(`\n🚀 Starting HighLevel export for Location: ${LOCATION_ID}`);
   console.log(`📁 Output: ${outputDir}\n`);
 
-  for (const r of RESOURCES) {
-    console.log(`🔄 Fetching ${r.name} ...`);
+  try {
+    await preflightCheck(cache);
+  } catch (err) {
+    console.error(`❌ Preflight failed: ${err.message}`);
+    process.exit(1);
+  }
+
+  for (const resource of RESOURCES) {
+    results.attempted++;
+    console.log(`🔄 Fetching ${resource.name} ...`);
 
     try {
       let data;
-
-      if (r.name === "funnel-pages") {
-        data = await fetchFunnelPages(cache["funnels"]);
+      if (resource.fetchFn) {
+        data = await resource.fetchFn(cache);
+      } else if (resource.useFetchAll) {
+        data = await fetchAll(resource.path, resource.params || {});
       } else {
-        data = r.useFetchAll
-          ? await fetchAll(r.path, r.params || {})
-          : await apiGet(r.path, r.params || {});
+        data = await apiGet(resource.path, resource.params || {});
       }
 
-      const filePath = `${outputDir}/${r.name}.json`;
-      await fs.writeJson(filePath, data, { spaces: 2 });
-
-      cache[r.name] = data;
-
-      console.log(`✅ Saved ${r.name}`);
+      const filePath = `${outputDir}/${resource.name}.json`;
+      await fs.writeJson(filePath, data ?? null, { spaces: 2 });
+      cache[resource.name] = data;
+      results.succeeded++;
+      console.log(`✅ Saved ${resource.name}`);
     } catch (err) {
-      console.log(`❌ ERROR exporting ${r.name}: ${err.message}`);
+      results.failed.push({ name: resource.name, error: err.message });
+      console.log(`❌ ERROR exporting ${resource.name}: ${err.message}`);
     }
   }
 
-  // Funnel pages AFTER funnels are fetched
-  console.log(`\n🔄 Fetching funnel-pages ...`);
-  const funnelPages = await fetchFunnelPages(cache["funnels"]);
-  await fs.writeJson(`${outputDir}/funnel-pages.json`, funnelPages, { spaces: 2 });
-  console.log(`✅ Saved funnel-pages`);
+  console.log("\n📊 Export Summary");
+  console.log(`  Resources attempted: ${results.attempted}`);
+  console.log(`  Successes: ${results.succeeded}`);
+  console.log(`  Failures: ${results.failed.length}`);
 
-  console.log("\n🎉 Export Completed!\n");
+  if (results.failed.length > 0) {
+    results.failed.forEach((failure) => {
+      console.log(`    - ${failure.name}: ${failure.error}`);
+    });
+    console.error("\n⚠️ Export completed with errors. Check logs for details.");
+    process.exit(1);
+  }
+
+  console.log("\n🎉 Export Completed Without Errors!\n");
 }
 
 runExport().catch((err) => {
