@@ -254,6 +254,9 @@ function extractPipelineStages(pipelines = []) {
 
 async function preflightCheck(cache) {
   console.log("🔍 Validating OAuth credentials via location metadata...");
+  console.log("DEBUG TOKEN MODE:", authMode);
+  console.log("DEBUG LOCATION:", LOCATION_ID);
+  console.log("DEBUG TOKEN (first 25):", (await getAccessToken()).slice(0, 25));
   const metadata = await apiGet(`/locations/${LOCATION_ID}`);
   cache["location-settings"] = metadata;
   cache["location-name"] = metadata?.name || LOCATION_ID;
